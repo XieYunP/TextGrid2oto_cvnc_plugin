@@ -23,6 +23,7 @@ import lab_generate.wavname2lab as wavname2lab
 import lab_generate.index2lab as index2lab
 import onnx_infer
 from textgrid2json import del_SP, TextGrid2ds_json, ds_json2filter, ds_json2word
+from textgrid2json import detect_short_phonemes
 from json2oto import json2CV_oto, json2oto, json2VCV_oto, json2test,json2arpasing_oto
 sys.path.append(str(ROOT / 'tg2svdb'))
 from tg2svdb import tg2sv_change
@@ -100,6 +101,16 @@ class MainFrame(wx.Frame):
         separator_sizer.Add(separator_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
         separator_sizer.Add(self.separator_text, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
         wav_box_sizer.Add(separator_sizer, 0, wx.ALL, 3)
+
+        # 自动生成SP开关
+        auto_sp_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.auto_sp_checkbox = wx.CheckBox(lab_wav_panel, label=_('lab.wavname.auto_sp'))
+        self.auto_sp_checkbox.SetToolTip(_('lab.wavname.auto_sp.tooltip'))
+        register(self.auto_sp_checkbox, 'lab.wavname.auto_sp.tooltip', 'tooltip')
+        register(self.auto_sp_checkbox, 'lab.wavname.auto_sp', 'checkbox')
+        self.auto_sp_checkbox.SetValue(True)
+        auto_sp_sizer.Add(self.auto_sp_checkbox, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        wav_box_sizer.Add(auto_sp_sizer, 0, wx.ALL, 3)
 
         generate_btn = wx.Button(lab_wav_panel, label=_('lab.wavname.generate'))
         register(generate_btn, 'lab.wavname.generate', 'button')
@@ -351,6 +362,61 @@ class MainFrame(wx.Frame):
 
         textgrid_panel.SetSizer(textgrid_sizer)
 
+        # 音素检测面板
+        detect_panel = wx.Panel(notebook)
+        detect_sizer = wx.BoxSizer(wx.VERTICAL)
+
+        detect_title = wx.StaticText(detect_panel, label=_('detect.title'))
+        register(detect_title, 'detect.title')
+        detect_sizer.Add(detect_title, 0, wx.ALL | wx.CENTER, 5)
+
+        # ── 检测设置 ──
+        detect_box = wx.StaticBox(detect_panel, label=_('detect.settings'))
+        detect_box_sizer = wx.StaticBoxSizer(detect_box, wx.VERTICAL)
+        register(detect_box, 'detect.settings', 'label')
+
+        detect_path_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        detect_path_label = wx.StaticText(detect_panel, label=_('detect.folder'))
+        register(detect_path_label, 'detect.folder')
+        self.detect_path_text = wx.TextCtrl(detect_panel, size=(400, -1))
+        detect_browse_btn = wx.Button(detect_panel, label=_('detect.browse_folder'))
+        register(detect_browse_btn, 'detect.browse_folder', 'button')
+        detect_browse_btn.Bind(wx.EVT_BUTTON, lambda event: self.on_browse_folder(event, self.detect_path_text))
+        detect_path_sizer.Add(detect_path_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        detect_path_sizer.Add(self.detect_path_text, 1, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        detect_path_sizer.Add(detect_browse_btn, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        detect_box_sizer.Add(detect_path_sizer, 0, wx.EXPAND | wx.ALL, 3)
+
+        detect_threshold_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        detect_threshold_label = wx.StaticText(detect_panel, label=_('detect.threshold'))
+        register(detect_threshold_label, 'detect.threshold')
+        self.detect_threshold_text = wx.TextCtrl(detect_panel, value="30", size=(80, -1))
+        self.detect_threshold_text.SetToolTip(_('detect.threshold.tooltip'))
+        register(self.detect_threshold_text, 'detect.threshold.tooltip', 'tooltip')
+        detect_threshold_unit = wx.StaticText(detect_panel, label=_('detect.threshold.unit'))
+        register(detect_threshold_unit, 'detect.threshold.unit')
+        detect_threshold_sizer.Add(detect_threshold_label, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        detect_threshold_sizer.Add(self.detect_threshold_text, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        detect_threshold_sizer.Add(detect_threshold_unit, 0, wx.ALL | wx.ALIGN_CENTER_VERTICAL, 3)
+        detect_box_sizer.Add(detect_threshold_sizer, 0, wx.ALL, 3)
+
+        detect_btn = wx.Button(detect_panel, label=_('detect.run'))
+        register(detect_btn, 'detect.run', 'button')
+        detect_btn.Bind(wx.EVT_BUTTON, self.on_detect_short_phonemes)
+        detect_box_sizer.Add(detect_btn, 0, wx.ALL | wx.CENTER, 5)
+
+        detect_sizer.Add(detect_box_sizer, 0, wx.EXPAND | wx.ALL, 5)
+
+        # 结果显示文本框
+        detect_result_label = wx.StaticText(detect_panel, label=_('detect.result'))
+        register(detect_result_label, 'detect.result')
+        detect_sizer.Add(detect_result_label, 0, wx.ALL | wx.LEFT, 5)
+
+        self.detect_result_text = wx.TextCtrl(detect_panel, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 400))
+        detect_sizer.Add(self.detect_result_text, 1, wx.EXPAND | wx.ALL, 5)
+
+        detect_panel.SetSizer(detect_sizer)
+
         # JSON生成面板
         json_panel = wx.Panel(notebook)
         json_sizer = wx.BoxSizer(wx.VERTICAL)
@@ -590,10 +656,12 @@ class MainFrame(wx.Frame):
         register(notebook, 'notebook.lab', 'notebook_tab', 0)
         notebook.AddPage(textgrid_panel, _('notebook.textgrid'))
         register(notebook, 'notebook.textgrid', 'notebook_tab', 1)
+        notebook.AddPage(detect_panel, _('notebook.detect'))
+        register(notebook, 'notebook.detect', 'notebook_tab', 2)
         notebook.AddPage(json_panel, _('notebook.json'))
-        register(notebook, 'notebook.json', 'notebook_tab', 2)
+        register(notebook, 'notebook.json', 'notebook_tab', 3)
         notebook.AddPage(mark_panel, _('notebook.mark'))
-        register(notebook, 'notebook.mark', 'notebook_tab', 3)
+        register(notebook, 'notebook.mark', 'notebook_tab', 4)
 
         # 底部：语言选择栏
         lang_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -1054,8 +1122,12 @@ class MainFrame(wx.Frame):
                 wx.CallAfter(self.lab_result_text.Clear)
                 wx.CallAfter(self.lab_result_text.AppendText, _('log.start_generate_lab'))
 
+                auto_sp = self.auto_sp_checkbox.GetValue()
+                wx.CallAfter(self.lab_result_text.AppendText,
+                             _('log.auto_sp_state').format(state=_('msg.on') if auto_sp else _('msg.off')))
+
                 with TextRedirector(self.lab_result_text):
-                    wavname2lab.run(path, cuts)
+                    wavname2lab.run(path, cuts, auto_sp)
 
                 wx.CallAfter(self.lab_result_text.AppendText, _('log.lab_complete'))
                 wx.CallAfter(wx.MessageBox, _('msg.ok.generate_complete'), _('msg.success'), wx.OK | wx.ICON_INFORMATION)
@@ -1319,6 +1391,58 @@ class MainFrame(wx.Frame):
                     pass
         self.stop_infer_btn.Disable()
         self.infer_result_text.AppendText(_('log.infer_stop_requested'))
+
+    def on_detect_short_phonemes(self, event):
+        """检测 TextGrid 中时长过短的音素"""
+        wav_folder = self.detect_path_text.GetValue().strip()
+        threshold_str = self.detect_threshold_text.GetValue().strip()
+
+        if not wav_folder:
+            wx.MessageBox(_('msg.err.select_folder'), _('msg.error'), wx.OK | wx.ICON_ERROR)
+            return
+
+        if not os.path.exists(wav_folder):
+            wx.MessageBox(_('msg.err.folder_not_exist'), _('msg.error'), wx.OK | wx.ICON_ERROR)
+            return
+
+        try:
+            threshold_ms = float(threshold_str)
+            if threshold_ms <= 0:
+                raise ValueError
+        except ValueError:
+            wx.MessageBox(_('msg.err.detect_threshold'), _('msg.error'), wx.OK | wx.ICON_ERROR)
+            return
+
+        # 提前检查是否有 TextGrid
+        has_textgrid = any(True for _ in Path(wav_folder).rglob('*.TextGrid'))
+        if not has_textgrid:
+            wx.MessageBox(_('msg.err.textgrid_not_exist'), _('msg.error'), wx.OK | wx.ICON_ERROR)
+            return
+
+        def detect_thread():
+            try:
+                wx.CallAfter(self.detect_result_text.Clear)
+                wx.CallAfter(self.detect_result_text.AppendText,
+                             _('log.detect.start').format(threshold=threshold_ms))
+
+                # TextRedirector 会同时把 print 内容写入结果框和原命令行
+                with TextRedirector(self.detect_result_text):
+                    results, file_count = detect_short_phonemes.run(wav_folder, threshold_ms)
+
+                wx.CallAfter(self.detect_result_text.AppendText,
+                             _('log.detect.summary').format(count=len(results), files=file_count))
+                wx.CallAfter(self.detect_result_text.ShowPosition,
+                             self.detect_result_text.GetLastPosition())
+                wx.CallAfter(wx.MessageBox,
+                             _('msg.ok.detect_complete').format(count=len(results), files=file_count),
+                             _('msg.success'), wx.OK | wx.ICON_INFORMATION)
+            except Exception:
+                tb = traceback.format_exc()
+                wx.CallAfter(self.detect_result_text.AppendText, _('log.failed').format(error=tb))
+                wx.CallAfter(wx.MessageBox, _('log.failed').format(error=tb), _('msg.error'), wx.OK | wx.ICON_ERROR)
+
+        thread = threading.Thread(target=detect_thread)
+        thread.start()
 
     def on_generate_json(self, event):
         wav_folder = self.json_path_text.GetValue().strip()
