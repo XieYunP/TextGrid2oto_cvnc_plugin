@@ -5,6 +5,7 @@ import time
 import traceback
 import threading
 from pathlib import Path
+from cvvnc_panel import CvvncPanel
 
 # ✅ 万能获取程序根目录（开发/打包通用）
 def get_app_root() -> Path:
@@ -649,6 +650,15 @@ class MainFrame(wx.Frame):
         mark_notebook.AddPage(multi_oto_panel, _('mark.multi_oto.title'))
         register(mark_notebook, 'mark.multi_oto.title', 'notebook_tab', 2)
 
+        # ── CVNC/CVVNC 方案自动生成 ──
+        self.cvvnc_panel = CvvncPanel(
+            mark_notebook,
+            on_browse_file=self.on_browse_file,
+            on_browse_folder=self.on_browse_folder,
+            on_generate=self.on_generate_cvvnc_oto,
+        )
+        mark_notebook.AddPage(self.cvvnc_panel, "CVNC/CVVNC/NCV 方案自动生成")
+
         mark_sizer.Add(mark_notebook, 1, wx.EXPAND | wx.ALL, 5)
         mark_panel.SetSizer(mark_sizer)
 
@@ -1078,6 +1088,177 @@ class MainFrame(wx.Frame):
                              _('msg.error'), wx.OK | wx.ICON_ERROR)
 
         thread = threading.Thread(target=generate_multi_oto_thread)
+        thread.start()
+
+    def on_generate_cvvnc_oto(self, event):
+        """生成 CVNC/CVVNC 方案的 oto"""
+        try:
+            vals = self.cvvnc_panel.get_values()
+        except ValueError as e:
+            wx.MessageBox(str(e), "错误", wx.OK | wx.ICON_ERROR)
+            return
+ 
+        trans_mode = vals['trans_mode']   # 'auto' / '3seg' / '2seg'
+        rule_path = vals['rule_path']
+        json_folder = vals['json_folder']
+        template_path = vals['template_path']
+        first_sound = vals['first_sound']
+        keep_isolated_vowel = vals['keep_isolated_vowel']
+        max_cv = vals['max_cv']
+        max_vc = vals['max_vc']
+        alias_strategy = vals['alias_strategy']
+        sort_mode = vals['sort_mode']
+        ensure_all_audio = vals['ensure_all_audio']
+        params = vals['params']
+ 
+        if not rule_path:
+            wx.MessageBox("请选择规则文件", "错误", wx.OK | wx.ICON_ERROR)
+            return
+        if not os.path.exists(rule_path):
+            wx.MessageBox("规则文件不存在", "错误", wx.OK | wx.ICON_ERROR)
+            return
+        if not json_folder:
+            wx.MessageBox("请选择声库文件夹", "错误", wx.OK | wx.ICON_ERROR)
+            return
+        if not os.path.exists(json_folder):
+            wx.MessageBox("声库文件夹不存在", "错误", wx.OK | wx.ICON_ERROR)
+            return
+        if template_path and not os.path.exists(template_path):
+            wx.MessageBox("模板 oto 文件不存在", "错误", wx.OK | wx.ICON_ERROR)
+            return
+ 
+        result_ctrl = self.cvvnc_panel.get_result_ctrl()
+ 
+        def thread_fn():
+            try:
+                wx.CallAfter(result_ctrl.Clear)
+                wx.CallAfter(result_ctrl.AppendText, "开始生成 CVNC/CVVNC oto...\n")
+                wx.CallAfter(result_ctrl.AppendText,
+                             f"最大CV别名数={max_cv if max_cv > 0 else '不限'}，"
+                             f"最大VC别名数={max_vc if max_vc > 0 else '不限'}\n")
+                wx.CallAfter(result_ctrl.AppendText,
+                             f"排序={sort_mode}，兜底={ensure_all_audio}，"
+                             f"保留单独纯元音={keep_isolated_vowel}，"
+                             f"重复策略={alias_strategy}\n")
+
+                if template_path and vals.get('tmpl_align') == 'auto':
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 "⚠ 自动模糊模式：从其他音频借来的条目可能错位，请手动核对\n")
+
+                mode_label = {
+                    'auto': '自动',
+                    '2seg': '强制二段式',
+                }.get(trans_mode, trans_mode)
+                wx.CallAfter(result_ctrl.AppendText, f"标记模式={mode_label}\n")
+                
+                if template_path:
+                    wx.CallAfter(result_ctrl.AppendText, f"模板={template_path}\n")
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 f"模板排序={vals.get('tmpl_sort', 'template')}，"
+                                 f"模板对齐={vals.get('tmpl_align', 'auto')}\n")
+ 
+                from json2oto import json2cvvnc_oto
+ 
+                count, warnings, missing_aliases, removed_count, report = json2cvvnc_oto.run(
+                    rule_path, json_folder,
+                    first_sound=first_sound,
+                    max_cv_aliases=max_cv,
+                    max_vc_aliases=max_vc,
+                    ensure_all_audio=ensure_all_audio,
+                    keep_isolated_vowel=keep_isolated_vowel,
+                    sort_mode=sort_mode,
+                    template_path=template_path if template_path else None,
+                    params=params,
+                    alias_strategy=alias_strategy,
+                    trans_mode=trans_mode,
+                    ncv_enabled=vals.get('ncv_enabled', False),
+                    tmpl_sort=vals.get('tmpl_sort', 'template'),
+                    tmpl_align=vals.get('tmpl_align', 'auto'),
+                )
+ 
+                wx.CallAfter(result_ctrl.AppendText,
+                             f"\n已生成 oto.ini：{count} 条目\n")
+                wx.CallAfter(result_ctrl.AppendText,
+                             f"冗余剔除：{removed_count} 条\n")
+ 
+                # ==== 覆盖检查 + 兜底报告 ====
+                bootstrap_details = report.get('bootstrap_details', [])
+                unresolved = report.get('unresolved', [])
+ 
+                unresolved_template = report.get('unresolved_template', [])
+ 
+                infos = report.get('infos', [])
+                if infos:
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 f"\n====== 信息（{len(infos)} 条） ======\n")
+                    for w in infos[:50]:
+                        wx.CallAfter(result_ctrl.AppendText, w + "\n")
+                    if len(infos) > 50:
+                        wx.CallAfter(result_ctrl.AppendText,
+                                     f"...（还有 {len(infos) - 50} 条未显示）\n")
+                        
+                if unresolved_template:
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 f"\n====== 模板中生成侧未算出的条目：{len(unresolved_template)} ======\n")
+                    for fn, alias in unresolved_template[:100]:
+                        wx.CallAfter(result_ctrl.AppendText,
+                                     f"  {fn}={alias}\n")
+                    if len(unresolved_template) > 100:
+                        wx.CallAfter(result_ctrl.AppendText,
+                                     f"  ...（还有 {len(unresolved_template) - 100} 条未显示）\n")
+ 
+                if missing_aliases:
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 f"\n====== 覆盖检查：缺失 {len(missing_aliases)} 个别名 ======\n")
+ 
+                    if bootstrap_details:
+                        wx.CallAfter(result_ctrl.AppendText,
+                                     f"\n--- 已兜底生成 {len(bootstrap_details)} 条 ---\n")
+                        for alias, fn, start_ms, end_ms in bootstrap_details[:100]:
+                            wx.CallAfter(result_ctrl.AppendText,
+                                         f"  '{alias}' → {fn}  ({int(start_ms)}~{int(end_ms)} ms)\n")
+                        if len(bootstrap_details) > 100:
+                            wx.CallAfter(result_ctrl.AppendText,
+                                         f"  ...（还有 {len(bootstrap_details) - 100} 条未显示）\n")
+ 
+                    if unresolved:
+                        wx.CallAfter(result_ctrl.AppendText,
+                                     f"\n--- 仍无法兜底 {len(unresolved)} 条 ---\n")
+                        for a in unresolved[:100]:
+                            wx.CallAfter(result_ctrl.AppendText, f"  {a}\n")
+                        if len(unresolved) > 100:
+                            wx.CallAfter(result_ctrl.AppendText,
+                                         f"  ...（还有 {len(unresolved) - 100} 条未显示）\n")
+                else:
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 "\n覆盖检查：所有预期别名均已覆盖。\n")
+ 
+                # ==== 其他警告 ====
+                if warnings:
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 f"\n====== 无法生成或需注意的采样（{len(warnings)} 条） ======\n")
+                    for w in warnings[:100]:
+                        wx.CallAfter(result_ctrl.AppendText, w + "\n")
+                    if len(warnings) > 100:
+                        wx.CallAfter(result_ctrl.AppendText,
+                                     f"...（还有 {len(warnings) - 100} 条未显示）\n")
+                else:
+                    wx.CallAfter(result_ctrl.AppendText,
+                                 "\n无警告，全部采样处理正常。\n")
+ 
+                wx.CallAfter(result_ctrl.AppendText, "\n完成！\n")
+                wx.CallAfter(wx.MessageBox,
+                             f"生成完成！\n条目数：{count}\n"
+                             f"冗余剔除：{removed_count}\n"
+                             f"缺失别名：{len(missing_aliases)}（兜底 {len(bootstrap_details)}，未解决 {len(unresolved)}）\n"
+                             f"警告：{len(warnings)}",
+                             "成功", wx.OK | wx.ICON_INFORMATION)
+            except Exception:
+                tb = traceback.format_exc()
+                wx.CallAfter(result_ctrl.AppendText, f"错误：\n{tb}\n")
+                wx.CallAfter(wx.MessageBox, tb, "错误", wx.OK | wx.ICON_ERROR)
+ 
+        thread = threading.Thread(target=thread_fn)
         thread.start()
 
     def on_browse_folder(self, event, text_ctrl):

@@ -1,202 +1,482 @@
-# **TextGrid2oto**
+================================================================================
+TextGrid2oto — CVNC / CVVNC / NCV 扩展
+================================================================================
 
-这是一个把 TextGrid / wav 转换为 **oto.ini** 等多种标记的程序，支持 CV、CVVC、VCV、ARPAsing 等录音方案。使用前您需要一定的 UTAU 等引擎的音源制作基础。
+原项目说明书
+--------------------------------------------------------------------------------
 
-当前版本：**GUI v2.2**
+本扩展基于原项目 TextGrid2oto 开发，原项目的完整说明书（含 CV / CVVC /
+VCV / ARPAsing 的详细操作流程、环境配置、模型下载说明等）请见：
 
-```mermaid
-flowchart LR
-    A[wav 音频] --> B[生成 lab]
-    B --> C[HubertFA<br/>强制对齐]
-    C --> D[TextGrid]
-    D --> E[生成 json]
-    E --> F[生成 oto.ini<br/>及其他标记]
-```
+    https://github.com/xiaobaijunya/TextGrid2oto
 
-## ⚠️ 重要：入口文件说明
+本扩展只新增了 CVNC / CVVNC / NCV 方案的生成逻辑，不修改原项目已有的
+CV / CVVC / VCV / ARPAsing 功能。原项目说明书里的环境配置、模型下载、
+lab 生成、TextGrid 推理、JSON 生成等步骤，在本扩展里完全适用。
 
-| 文件 | 状态 | 说明 |
-| --- | --- | --- |
-| **`GUI.py`** | ✅ **最新版（推荐）** | wxPython 图形界面，功能最全，持续维护 |
-| `main.py` | ❌ **已废弃** | 旧版命令行（手动输入）脚本，保留仅供参考 |
-| `app.py` | ❌ **已废弃** | 旧版 Gradio WebUI，保留仅供参考 |
 
-> 请始终使用 `GUI.py` 作为程序的入口。`main.py` 和 `app.py` 不再维护，可能缺少新功能甚至无法运行。
->
-> `WEB-UI.py` 是基于 ONNX 模型的轻量 WebUI，属于另一套可选方案（见下文）。
+分割文件与模板生成
+--------------------------------------------------------------------------------
 
-## 功能特性
+本扩展所需的 RULE 文件（分割文件）和 oto 模板，可以从 reclistgen++ 获得：
 
-- 根据 wav 文件名（拼音 / 假名）自动生成 `.lab`
-- 调用 SOFA / HubertFA ONNX 模型进行强制对齐，生成 TextGrid
-- 将 TextGrid 转换为 json 并过滤、整理音素
-- 生成多种格式的 `oto.ini`：**CV / CVVC / VCV / ARPAsing**
-- oto 参数（左线、固定、右线、预发声、交叉等）可视化调节
-- 支持批量处理、录音预设、oto 预设
-- 多语言界面（中文 / English / 日本語）
+    https://github.com/XieYunP/reclistgen_plus_plus
 
-## 目录结构（主要部分）
+reclistgen++ 是一个录音表 + oto 模板生成器，可以：
 
-```
-utau自动标注/
-├── GUI.py                 # ✅ 最新入口（wxPython GUI）
-├── main.py                # ❌ 已废弃（命令行）
-├── app.py                 # ❌ 已废弃（Gradio WebUI）
-├── WEB-UI.py              # 可选：ONNX 版 WebUI
-├── onnx_infer.py          # ONNX 推理 / 强制对齐脚本
-├── GUI.spec               # Windows 打包配置
-├── GUI-macos.spec         # macOS 打包配置
-├── build_GUI.bat          # Windows 一键打包脚本
-├── config.txt             # 运行参数示例配置
-├── i18n/                  # 多语言文本
-├── img/                   # 图标等资源
-├── lab_generate/          # 生成 lab
-├── textgrid2json/         # TextGrid → json
-├── json2oto/              # json → oto.ini
-├── oto/                   # oto 读取/校验/参数面板
-├── presamp/               # 各录音方案的 presamp.ini
-├── tg2svdb/               # 转为 svdb 相关
-├── HubertFA_model/        # ONNX 模型（需自行下载，见「环境配置」）
-├── HubertFA/ SOFA/        # 模型训练与导出源码
-└── requirements*.txt      # 依赖清单
-```
+  - 生成录音表（reclist），即每个音节在录音时对应的文件名
+  - 生成与录音表配套的 oto 模板（虚拟拍子时间戳）
+  - 导出 RULE 格式的分割文件（拼音=辅音,整音,transition列表,coda）
 
-## 环境配置
+用 reclistgen++ 生成分割文件和模板后，在本扩展的面板里：
 
-推荐使用 **conda** 创建独立环境（Python 建议 **3.12**，本项目在 **Python 3.12.13** 下测试通过）。
+  规则文件     → 选 reclistgen++ 导出的 RULE 文件
+  模板 oto     → 选 reclistgen++ 导出的 oto 模板
 
-### 1. 创建并激活环境
+注意：模板里的时间戳是虚拟拍子时间（如 44 / 544 / 1044 / …），
+不是真实音频毫秒数。本扩展的模板对齐逻辑只把模板当作
+“白名单 + 顺序”使用，时间戳始终由生成侧按当前音频的拼音位置重算，
+不会直接采用模板的虚拟时间戳。
 
-```bash
-conda create -n textgrid2oto python=3.12 -y
-conda activate textgrid2oto
-```
+一、项目简介
+--------------------------------------------------------------------------------
 
-### 2. 安装依赖（GUI.py）
+本项目在原 TextGrid2oto 基础上，扩展了一套 CVNC / CVVNC / NCV 方案的
+oto.ini 自动生成功能。
 
-运行最新版 `GUI.py` 只需安装 `requirements-wxui.txt` 即可：
+  CVNC
+      辅音 + 元音 + 韵尾
+      标准带韵尾的音节，如 guan（g + ua + n）。
+      在 VCCV 模式下，韵尾 n 会连接到下一个音节的辅音。
 
-```bash
-pip install -r requirements-wxui.txt
-```
+  CVVNC
+      辅音 + 介母 + 元音 + 韵尾
+      带介母的三拼音节，如 guan（g + u + a + n）。
+      介母 i 和元音 a 之间的过渡属于字内衔接（transition），
+      韵尾 n 的处理与 CVNC 相同。
 
-> 说明：`onnxruntime-webgpu` 为 ONNX Runtime 的 WebGPU 执行后端（需 **Python ≥ 3.11**，推荐 **3.12**，可在 Windows / macOS / Linux 上通过 GPU 加速）；如需改用 CPU 版，请将其替换为 `onnxruntime`。
+  NCV
+      跨音节的衔接方式，不是单个音节的结构。
+      指上一音节的韵尾（N）直接连接到下一音节的整音（V），
+      不再经过下一音节的辅音（C）。
+      这正是 VCV 模式的核心特征（N → V）；
+      而 VCCV 模式是 N → C，即韵尾先连接到下一音节的辅音。
 
-<sub>旧的已废弃方案对应的依赖（**无需安装**，仅存档参考）：`requirements-webui-onnx.txt`（ONNX 版 WebUI）、`requirements.txt`（完整依赖，含 torch、训练、Gradio 等，体积较大）。</sub>
+  关键区别
+      CVNC / CVVNC 描述的是音节内部的组成（有没有介母、有没有韵尾）。
+      NCV 描述的是音节之间的衔接方式
+      （韵尾接元音，还是韵尾接辅音）。
+      如果用 CVNC / CVVNC 的分割表但选了 VCV 模式，
+      上一个音的韵尾会直接连到下一个音节的整音
+      （包括介母整音和普通整音），而不是连到下一个辅音——
+      这就是 NCV 行为。
 
-### 3. 下载并放置模型
+原项目地址：
+  https://github.com/xiaobaijunya/TextGrid2oto
 
-ONNX 模型体积较大，未直接包含在仓库中，请从 Releases 页面下载：
+核心思路：
+  用 ds_phone_filter.json + word_phone.json 的时间戳精确切分每个音节的
+  辅音段 / 元音段 / 韵尾段，再用 RULE 文件里的字内衔接声明
+  （transition 数量 + coda 是否带 ~）判定该音节走两段式 / 三段式 /
+  四段式，最后按公式算出每个 oto 条目的
+  offset / consonant / cutoff / preutterance / overlap。
 
-- 📦 **[HubertFA_model 下载（Release v0.1.0）](https://github.com/xiaobaijunya/TextGrid2oto/releases/tag/v0.1.0)**
-- 资源文件：`HubertFA_model.zip`（约 244 MB）
-  - SHA256：`fde3cd59795754e7e1b2fa5495e40b43fe1efa28e3588765022542abe6ec8eb7`
-- 模型源自 [wolfgitpr/HubertFA v0.0.7](https://github.com/wolfgitpr/HubertFA/releases/tag/v0.0.7)，为适配本项目架构做了部分修改。
 
-**放置路径：** 将下载的 `HubertFA_model.zip` 解压，把解压出的 **`HubertFA_model` 整个文件夹放到项目根目录**（与 `GUI.py` 同级），最终结构如下：
+二、操作说明
+--------------------------------------------------------------------------------
 
-```
-TextGrid2oto/                    # 项目根目录
-├── GUI.py
-├── onnx_infer.py
-└── HubertFA_model/              # ← 解压到这里
-    ├── 1218_hfa_model/
-        ├── model.onnx
-        ├── vocab.json
-        ├── config.json
-        ├── zh.txt
-        ├── en-arpasing.txt
-        └── ja-*.txt
-```
+基本流程
+~~~~~~~~
 
-**注意事项：**
+  1. 打开面板：Mark 标签页 → CVNC/CVVNC/NCV 方案自动生成
 
-1. 目录层级必须为 `HubertFA_model/<模型名>/model.onnx`。**不要把 `HubertFA_model` 解压进另一层同名文件夹**（例如出现 `HubertFA_model/HubertFA_model/...` 就是错的）。
-2. 每个模型文件夹内必须同时包含 `model.onnx`、`vocab.json` 以及对应语言的字典文件（如 `zh.txt`、`en-arpasing.txt`、`ja-hira-假名.txt` 等）。
-3. 在 GUI 中选择模型时，请选择到 **具体的模型文件夹**（例如 `HubertFA_model/1218_hfa_model`），而不是 `HubertFA_model` 这一层。
+  2. 准备输入：
+       规则文件        RULE 文件（.ini 或 .txt），格式见下节
+       声库文件夹      包含 json/ds_phone_filter.json 和
+                       json/word_phone.json 的目录
+       模板 oto（可选） 白名单式 oto，用于限定要生成哪些条目
 
-### 4. 配置参数
+  3. 配置参数（见第三节）
 
-运行参数可参考根目录的 `config.txt`（wav 路径、字典、presamp、忽略音素、录音方案、oto 参数等）。
+  4. 点击"生成 oto"：产出 声库文件夹/oto.ini
 
-## 如何运行
+  5. 结果窗口显示：条目数、缺失别名、警告、模板未匹配项
 
-在已激活环境、且位于项目根目录下：
 
-```bash
-python GUI.py
-```
+RULE 文件格式
+~~~~~~~~~~~~~
 
-程序会打开 wxPython 图形界面，按标签页依次操作即可：
+  拼音=辅音,整音,transition列表,coda
 
-1. **生成 lab**：选择 wav 所在文件夹与分隔符
-2. **生成 TextGrid**：选择对应 ONNX 模型与字典进行强制对齐
-3. **生成 json**：由 TextGrid 转换并过滤音素
-4. **生成 oto**：选择录音方案（CV / CVVC / VCV / ARPAsing）生成 `oto.ini`
+  辅音            声母（可以为空，如 a=,a,,a）
+  整音            音节整体称呼（如 bao 的整音是 bA）
+  transition列表  1 个或 2 个（逗号分隔），用于字内衔接
+  coda            韵尾；带 ~ 表示该音节有独立韵尾段
 
-如需直接使用命令行对齐（调试用）：
+示例：
 
-```bash
-python onnx_infer.py --onnx_path HubertFA_model/1218_hfa_model --wav_folder <wav目录> --language en --dictionary HubertFA_model/1218_hfa_model/en-arpasing.txt
-```
+  zen=z,zE,"_En",n~           无介母，1 个 transition（元音→韵尾）
+  guan=g,gu_,"ua'_,_a'n",n~   有介母，2 个 transition
+  jia=j,ji_,"ia_",a           有介母，1 个 transition（coda 不带 ~）
+  ai=,a',"_a'i",i~            纯元音音节，有独立韵尾
+  er=,er',"_er'",r'~          双元音性质，唯一 transition
 
-## 如何编译（打包）
 
-打包使用 **PyInstaller**，请先在目标环境安装：
+字内衔接判定规则
+~~~~~~~~~~~~~~~~
 
-```bash
-pip install pyinstaller
-```
+  transition 数量 | coda 是否带 ~ | 判定             | 字内衔接生成
+  ----------------|---------------|------------------|---------------
+        0         |      —        | 两段式           | 不生成
+        1         |     否        | 四段式（有介母） | 类型 A
+        1         |     是        | 三段式（无介母） | 类型 B
+        2         |     任意      | 四段式（有介母） | 类型 A + 类型 B
 
-### Windows
 
-方式一：运行一键脚本
+三、参数详解
+--------------------------------------------------------------------------------
 
-```bat
-build_GUI.bat
-```
+3.1 oto 字段基础
+~~~~~~~~~~~~~~~~
 
-方式二：手动执行
+  offset        条目在音频中的起始位置（ms）
+  consonant     固定段结束位置相对于 offset 的距离
+  cutoff        右边界相对于 offset 的距离（一般为负值）
+  preutterance  预发声位置相对于 offset 的距离
+  overlap       重叠位置相对于 offset 的距离
 
-```bash
-pyinstaller GUI.spec
-```
+所有公式内部算的是绝对毫秒（left / preutt / right / fixed / overlap），
+最后由 _to_oto 一次性转成相对值。
 
-产物输出在 `dist/TextGrid2oto/` 目录，可执行文件为 `dist/TextGrid2oto/TextGrid2oto.exe`。
 
-> `build_GUI.bat` 中写死了 conda 路径与环境名（`F:\ProgramData\miniforge3`、`test`），请按自己的环境修改其中的激活命令。
+3.2 面板主参数
+~~~~~~~~~~~~~~
 
-### macOS
+  标记模式
 
-```bash
-pyinstaller GUI-macos.spec
-```
+      自动
+          按 RULE 的 transition 数量 + coda 是否带 ~ 判定模式：
+            RULE 有介母          → 四段式，对齐介母和韵尾
+            RULE 无介母 coda 带 ~ → 三段式，对齐韵尾
+            RULE 无介母 coda 无 ~ → 四段式但无介母，只有字内衔接 A
+          三段式的独立韵尾段若 JSON 未切出，用假定位置（assumed_pct）
+          代替。
 
-产物输出为 `dist/TextGrid2oto.app`。
+      强制二段式
+          忽略 RULE，所有音节按两段式处理。
+          字内衔接一律不生成。
 
-> macOS 的 spec 已包含 `presamp`、`tg2svdb/字典`、图标等资源（`datas`）。如打包后运行时提示缺少资源文件，请对照 `GUI-macos.spec` 补全 `GUI.spec` 中的 `datas`。
+  规则文件
+      RULE 文件路径
 
-## 注意事项
+  声库文件夹
+      含 json/ 子目录的声库根目录
 
-1. 生成 lab 的时候，请确保您的 wav 名称的 **拼音或假名** 和 **实际音频内容** 可以一一对应。
-2. 若使用 scipy ≥ 1.14 并在 PyInstaller 打包后启动报错，请参考用户笔记处理 `scipy/stats/_distn_infrastructure.py` 中 `del obj` 的 `NameError` 问题。
-3. 打包后的程序请连同 `dist/` 目录下的全部文件一起分发，不要只拷贝 exe。
+  开头音类型
+      辅音 (- b)      开头音别名用 - <辅音>
+      整音 (- bi_)    开头音别名用 - <整音>
+      纯元音开头强制走整音，不受此项影响
 
-## 联系我们
+  保留单独纯元音整音
+      非开头位置的无辅音整音（如 a / o）是否单独产一条。默认关闭
 
-QQ 群聊：**1036935644**
+  最大CV别名数
+      同名 CV 别名的最大条目数，0 = 不限。
+      分类下受限制的条目：
+        - 开头音（所有音频的 - 前缀条目）
+        - 首音节的字内衔接
+      注意：字内衔接的首 / 非首会按音节位置分到不同桶里。
 
-## 相关链接
+  最大VC别名数
+      同名 VC 别名的最大条目数，0 = 不限。
+      分类下受限制的条目：
+        - 非首音节的字内衔接
+        - 跨音节 cV（{front} {辅音}）
+        - 跨音节 cO（{front} {整音}）
+      coda R 通过 _bootstrap_missing_aliases 补产，不经 add_entry，
+      所以不受此上限控制。
 
-- [xiaobaijunya/TextGrid-AuditioMarkTools: TextGrid 的 Auditio 标记工具](https://github.com/xiaobaijunya/TextGrid-AuditioMarkTools)
-- [wolfgitpr/HubertFA: Hubert-based Forced Aligner](https://github.com/wolfgitpr/HubertFA)
-- [praat](https://github.com/praat/praat.github.io)
-- [openvpi/DiffSinger](https://github.com/openvpi/DiffSinger)
-- [stakira/OpenUtau: Open singing synthesis platform / Open source UTAU successor](https://github.com/stakira/OpenUtau)
+  重复别名策略
+      替换已有同别名条目    新条目替换旧条目
+      强制后备别名          加 #1 / #2 后缀
 
-## License
+  oto 排序（无模板时）
+      自然排序    按 filename + offset
+      分类排序    按别名类别
+                  （开头 / 整音 / 字内衔接 / 跨音节 / coda R）
 
-本项目采用 [GPL-3.0 license](https://github.com/xiaobaijunya/TextGrid2oto#GPL-3.0-1-ov-file) 开源协议。
+  确保所有音频至少一条 oto
+      有模板时自动关闭
 
-> [!NOTE]
-> 本 README 内容由 **DeepSeek V4.1 Flash** 生成，**xiaobaijun** 仅进行内容审查和修改，可能内容不完全正确，请以实际代码与程序行为为准。
+  NCV 模式
+      开启后，跨音节衔接产 {front} {下一整音}（cO）
+      而不是 {front} {下一辅音}（cV）。
+
+
+3.3 模板设置（仅在有模板路径时显示）
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  模板 oto
+      模板文件路径。留空则走普通生成。
+
+  模板排序
+      按模板顺序         oto.ini 里的条目顺序完全按模板
+      按发音分类排序     按 oto 排序 分类
+
+  模板对齐
+      严格匹配      模板要求但本音频产不出 → 记 missing
+      自动模糊      本音频产不出 → 用 forced_index 强制补产
+                    （时间戳仍来自当前音频）
+
+  模板机制说明
+      模板是白名单：只有模板里出现的 (filename, alias) 才会被保留。
+      优先从生成侧正常产出的条目匹配（full_index）。
+      匹配不到时，- X 类别名从 start_index 借
+      （处理非首音节开头音）。
+      自动模糊 模式下再从 forced_index 强制补产一份
+      （当前音频按公式重算，时间戳正确）。
+
+
+3.4 字内衔接参数
+~~~~~~~~~~~~~~~~
+
+  两类字内衔接都遵循同一组字段顺序：
+
+      左边界 → 重叠 → 预发声 → 固定 → 右边界
+
+  字段含义：
+
+      左边界    公式的起始位置
+      重叠      左边界 → 预发声之间偏右的比例
+      预发声    预先发声位置；不同类型有不同定位
+      固定      预发声 → 右边界之间偏左的比例
+      右边界    公式的终止位置
+
+
+  类型 A：介母→主元音（四段式第一段）
+  ..................................
+
+      左边界
+          固定为元音起点（用户不可调）
+
+      重叠
+          左边界 → 预发声之间偏右
+          默认 100%，即与预发声重合
+
+      预发声
+          定位方式：元音起点 + 元音时长 × boundary_pct
+          默认 boundary_pct = 15%
+          即"介母 / 主元音分界点"，用户可调
+
+      固定
+          预发声 → 右边界之间偏左
+          默认 30%
+
+      右边界
+          有独立韵尾段 → 韵尾起点
+          无独立韵尾段 → 元音起点 + 元音时长 × right_pct
+          默认 right_pct = 65%，用户可调
+
+
+  类型 B：主元音→韵尾（三段式 + 四段式第二段通用）
+  ................................................
+
+      左边界
+          元音起点 → 预发声之间偏右的比例
+          默认 left_pct = 65%，用户可调
+
+      重叠
+          左边界 → 预发声之间偏右
+          默认 50%
+
+      预发声
+          定位方式：
+            有独立韵尾段 → 韵尾起点
+            无独立韵尾段 → 元音起点 + 元音时长 × assumed_pct
+                            （即"假定韵尾起点"，默认 75%）
+          用户可调 assumed_pct
+
+      固定
+          预发声 → 右边界之间偏左
+          默认 30%
+
+      右边界
+          有独立韵尾段 → 韵尾结束
+          无独立韵尾段 → 元音结束
+
+
+  元音区
+      对于 yuan 这类被 JSON 切成 y0 + van 两段的音节，
+      字内衔接公式会把两段合并为一个"元音区"使用，即
+          v_zone_start = 元音段起点
+          v_zone_end   = 韵尾段结束
+
+
+3.5 其它字内参数
+~~~~~~~~~~~~~~~~
+
+  以下参数组也都遵循"左边界 → 重叠 → 预发声 → 固定 → 右边界"
+  的语义顺序；预发声字段名按类型不同而不同。
+
+  开头辅音
+      左边界向左偏移   75ms   offset 相对辅音起点的左移量
+                              （超出音频头取头）
+      预发声           辅音起点（固定）
+      固定             30%
+      重叠             30%
+
+  整音-无介母
+      左边界           辅音起点（无辅音时 = 元音起点）
+      预发声           元音起点
+      右边界           元音段起点 → 结束之间偏右 65%
+      固定             30%
+      重叠             30%
+
+  整音-有介母
+      左边界           辅音起点（无辅音时 = 元音起点）
+      预发声           元音起点
+      右边界           元音段前 15%，即介母 / 主元音分界点
+      固定             30%
+      重叠             30%
+
+  开头纯元音
+      左边界向左偏移   75ms
+      预发声           元音起点
+      右边界           元音段起点 → 结束之间偏右 65%
+      固定             15%
+      重叠             30%
+
+  非开头纯元音
+      左边界           元音起点
+      预发声           元音起点 → 右边界之间偏右 15%
+      右边界           元音段起点 → 结束之间偏右 65%
+      固定             15%
+      重叠             30%
+
+  coda R
+      左边界           韵尾段（或元音段）起点 → 结束之间偏右 75%
+      预发声           韵尾段（或元音段）终点
+      右边界           预发声 + 右偏移（150ms，超出音频尾取尾）
+      固定             30%
+      重叠位置         50%
+
+  元音→辅音（跨音节）
+      左边界           韵尾段（或元音段）起点 → 结束之间偏右 65%
+      预发声           韵尾段（或元音段）终点
+      右边界           下一辅音中点
+      固定             30%
+      重叠             30%
+
+  元音→整音（跨音节）
+      左边界           韵尾段（或元音段）起点 → 结束之间偏右 65%
+      预发声           下一元音起点
+      右边界           下一元音段起点 → 结束之间偏右 65%
+      固定             30%
+      重叠             30%
+
+
+四、代码改动
+--------------------------------------------------------------------------------
+
+4.1 新增文件
+~~~~~~~~~~~~
+
+  json2oto/json2cvvnc_oto.py    核心生成逻辑（约 1400 行）
+  cvvnc_panel.py                CVNC/CVVNC/NCV 方案面板（ScrolledPanel）
+  cvvnc_params_panel.py         参数面板（子 Notebook）
+
+
+4.2 修改文件
+~~~~~~~~~~~~
+
+  GUI.py 中新增：
+      顶部 from cvvnc_panel import CvvncPanel
+      mark_notebook 中新增 CVNC 页面（第四个 tab）
+      新增 on_generate_cvvnc_oto 方法（约 150 行）
+
+
+4.3 核心逻辑说明
+~~~~~~~~~~~~~~~~
+
+  json2cvvnc_oto.py 的主要结构：
+
+    1. parse_rule_file
+       解析 RULE，每个音节得到 {consonant, onset, transitions, coda}
+
+    2. _scan_syllable_phones_by_word
+       从 word_phone.json 读音节时间戳，把 ds_phone_filter.json 的
+       phone 段按重叠率 >= 50% 归属给每个音节
+
+    3. _has_mediant_in_rule / _decide_mode
+       判定音节走两段式 / 三段式 / 四段式
+
+    4. _calc_*
+       各类型字内 / 跨音节衔接的公式
+       （_calc_trans_a、_calc_trans_b、_calc_cV、_calc_cO、
+         _calc_coda_r 等）
+
+    5. generate_oto
+       主生成循环，逐音节产出条目；
+       同时记录 full_index（生成侧正常产出的全量索引）
+
+    6. _build_full_index
+       无条件扫一遍所有音频，产两份索引：
+         full_index_extra   按 _decide_mode 产
+         forced_index       不看模式，RULE 声明了 transition /
+                            下一音节是整音就产
+
+    7. apply_template_with_offset
+       模板作为白名单 + 顺序，三级匹配：
+         full_index → start_index → forced_index
+
+    8. sort_oto_entries
+       自然 / 分类 / 模板顺序三种排序
+
+    9. run
+       入口，串联全流程
+
+
+4.4 主要设计决策
+~~~~~~~~~~~~~~~~
+
+  - 不用文本匹配切音节，全部靠时间戳
+    （word_phone 提供的 [xmin, xmax]）
+    → 符号不一致也能正确归属
+
+  - 字内衔接基于"元音区"（vowel_p + coda_p 合并），
+    不依赖 JSON 是否切出独立韵尾段
+
+  - NCV 模式可切换：关闭走传统 cV（到辅音），
+    开启走 cO（到整音）
+
+  - 模板只做白名单 + 顺序，时间戳始终来自当前音频，
+
+
+五、常见问题
+--------------------------------------------------------------------------------
+
+  Q：为什么 er / ai / an 这类音节有字内衔接？
+  A：RULE 声明了 transition，且 coda 带 ~。
+     JSON 未切出独立韵尾时用 假定韵尾起点 估算位置。
+
+  Q：为什么生成的条目比模板少 / 多？
+  A：模板是白名单，模板没列的一律丢弃。
+     条目少通常是因为生成侧没产出对应别名——
+     看结果窗口里的"模板中生成侧未算出的条目"清单。
+
+  Q：NCV 模式下为什么看不到到辅音的别名（如 a b）？
+  A：NCV 模式设计上就不产 cV，只产 cO（a ba）。
+     关闭 NCV 模式即可恢复。
+
+  Q：模板设置里的"严格匹配"和"自动模糊"有什么区别？
+  A：严格匹配 只从生成侧正常产出里找；
+     自动模糊 会额外启用 forced_index，把 RULE 声明了但 JSON 未切出
+     独立段的情况也按公式强制补产一份。
+
+  Q：最大 CV / VC 别名数是怎么分类的？
+  A：受"最大CV别名数"限制的：
+       开头音（所有音频的 - 前缀条目）、首音节的字内衔接。
+     受"最大VC别名数"限制的：
+       非首音节的字内衔接、跨音节 cV / cO。
+     coda R 通过 _bootstrap_missing_aliases 补产，不经 add_entry，
+     不受这两个上限控制。
