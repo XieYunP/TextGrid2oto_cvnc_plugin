@@ -4,7 +4,7 @@
 
 ### 原项目说明书
 
-本扩展基于原项目 TextGrid2oto 开发，原项目的完整说明书（含 CV / CVVC / VCV / ARPAsing 的详细操作流程、环境配置、模型下载说明等）请见：
+本扩展基于原项目 TextGrid2oto 使用deepseek辅助开发，原项目的完整说明书（含 CV / CVVC / VCV / ARPAsing 的详细操作流程、环境配置、模型下载说明等）请见：
 
 - <https://github.com/xiaobaijunya/TextGrid2oto>
 
